@@ -63,11 +63,8 @@ jobs:
         Write-Error "❌ Failed to get ngrok URL after multiple attempts."
         exit 1
       shell: powershell
-
-    - name: Display Connection Info
-      run: echo "✅ Connect using: ${{ steps.get-url.outputs.url }}"
-      # The 'shell' line below was causing the error. It's now removed as powershell is the default.
-
+- name: Display Connection Info
+  run: echo "✅ Connect using: ${{ steps.get-url.outputs.url }}"
     - name: Keep Workflow Alive
       run: Start-Sleep -Seconds 20700
       shell: powershell
