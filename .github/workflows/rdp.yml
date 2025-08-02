@@ -6,7 +6,7 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 350 # To prevent it from running forever
+    timeout-minutes: 350
 
     steps:
     - name: Checkout Repository
@@ -66,8 +66,8 @@ jobs:
 
     - name: Display Connection Info
       run: echo "✅ Connect using: ${{ steps.get-url.outputs.url }}"
-      shell: bash
+      # The 'shell' line below was causing the error. It's now removed as powershell is the default.
 
     - name: Keep Workflow Alive
-      run: Start-Sleep -Seconds 20700 # About 5 hours 45 minutes
+      run: Start-Sleep -Seconds 20700
       shell: powershell
