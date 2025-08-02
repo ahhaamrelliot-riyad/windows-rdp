@@ -1,69 +1,73 @@
-name: Setup ngrok and Remote Desktop
+name: Windows RDP via ngrok
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
-  setup-ngrok:
+  build:
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 350 # To prevent it from running forever
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+    - name: Checkout Repository
+      uses: actions/checkout@v3
 
-      - name: Download ngrok
-        run: Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+    - name: Download ngrok
+      run: |
+        Invoke-WebRequest -Uri https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+        Expand-Archive ngrok.zip -DestinationPath .
+      shell: powershell
 
-      - name: Extract ngrok
-        run: Expand-Archive ngrok.zip -DestinationPath .
+    - name: Authenticate ngrok
+      run: .\ngrok.exe authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
+      shell: powershell
 
-      - name: Authenticate ngrok
-        run: .\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
-        env:
-          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+    - name: Enable Remote Desktop
+      run: |
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 1
+      shell: powershell
 
-      - name: Enable Remote Desktop
-        run: |
-          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 1
+    - name: Set User Password
+      run: |
+        $password = "P@ssw0rd!"
+        $user = "runneradmin"
+        $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+        Set-LocalUser -Name $user -Password $securePassword
+      shell: powershell
 
-      - name: Set Password for runneradmin
-        run: |
-          $secPass = ConvertTo-SecureString "P@ssw0rd!" -AsPlainText -Force
-          Set-LocalUser -Name "runneradmin" -Password $secPass
+    - name: Start ngrok Tunnel
+      run: .\ngrok.exe tcp 3389 --log "ngrok.log"
+      shell: cmd
 
-      - name: Start ngrok Tunnel
-        run: Start-Process -FilePath .\ngrok.exe -ArgumentList "tcp 3389 --log=stdout" -NoNewWindow -RedirectStandardOutput ngrok.log
-
-      - name: Get Public URL
-        id: get-url
-        run: |
-          $maxAttempts = 10
-          $delay = 5
-          for ($i = 1; $i -le $maxAttempts; $i++) {
-            Write-Host "Attempting to get ngrok URL (Attempt $i)..."
-            $logContent = Get-Content ./ngrok.log -ErrorAction SilentlyContinue
-            $tunnelLine = $logContent | Select-String "url=tcp://(.+)"
-            if ($tunnelLine) {
-              $url = $tunnelLine.Matches.Groups[1].Value
-              Write-Host "✅ Public URL Found: $url"
-              echo "url=$url" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+    - name: Get Public URL
+      id: get-url
+      run: |
+        for ($i=1; $i -le 15; $i++) {
+          Write-Host "Attempting to get ngrok URL (Attempt $i)..."
+          try {
+            $response = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:4040/api/tunnels"
+            $tunnel = $response.tunnels | Where-Object { $_.proto -eq "tcp" }
+            if ($tunnel) {
+              Write-Host "✅ Public URL Found: $($tunnel.public_url)"
+              echo "url=$($tunnel.public_url)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
               exit 0
             }
-            Start-Sleep -Seconds $delay
           }
-          Write-Error "❌ Failed to get ngrok URL after $maxAttempts attempts."
-          exit 1
-        shell: pwsh
+          catch {
+            # Catch errors if API is not ready, and continue to next attempt
+          }
+          Start-Sleep -Seconds 5
+        }
+        Write-Error "❌ Failed to get ngrok URL after multiple attempts."
+        exit 1
+      shell: powershell
 
-      - name: Display Connection Info
-        run: echo "✅ Connect using: ${{ steps.get-url.outputs.url }}"
+    - name: Display Connection Info
+      run: echo "✅ Connect using: ${{ steps.get-url.outputs.url }}"
+      shell: bash
 
-      - name: Keep Alive
-        run: Start-Sleep -Seconds 21000 # Keep alive for ~6 hours
-        shell: pwsh
+    - name: Keep Workflow Alive
+      run: Start-Sleep -Seconds 20700 # About 5 hours 45 minutes
+      shell: powershell
