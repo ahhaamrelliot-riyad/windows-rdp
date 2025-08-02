@@ -15,28 +15,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Download ngrok (with retry)
-        run: |
-          $retry = 3
-          while ($retry -gt 0) {
-            try {
-              Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip -UseBasicParsing
-              if (Test-Path ngrok.zip) { break }
-            } catch {
-              Write-Host "Retrying download... ($retry left)"
-            }
-            Start-Sleep -Seconds 5
-            $retry--
-          }
-          if (!(Test-Path ngrok.zip)) { throw "❌ Failed to download ngrok after retries." }
+      - name: Download ngrok
+        run: Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
 
       - name: Extract ngrok
-        run: |
-          Expand-Archive ngrok.zip -DestinationPath .
-          if (!(Test-Path .\ngrok.exe)) { throw "❌ Failed to extract ngrok." }
-
-      - name: Update ngrok
-        run: .\ngrok.exe update
+        run: Expand-Archive ngrok.zip -DestinationPath .
 
       - name: Authenticate ngrok
         run: .\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
@@ -51,36 +34,36 @@ jobs:
 
       - name: Set Password for runneradmin
         run: |
-          $user = Get-LocalUser -Name "runneradmin"
-          if ($user.Enabled -eq $false) { Enable-LocalUser -Name "runneradmin" }
           $secPass = ConvertTo-SecureString "P@ssw0rd!" -AsPlainText -Force
           Set-LocalUser -Name "runneradmin" -Password $secPass
 
-      - name: Start ngrok TCP tunnel (RDP port)
-        run: |
-          Start-Process -FilePath .\ngrok.exe -ArgumentList "tcp 3389" -WindowStyle Hidden
-          Start-Sleep -Seconds 25
-          Get-Content ngrok.log -ErrorAction SilentlyContinue
+      - name: Start ngrok Tunnel
+        run: Start-Process -FilePath .\ngrok.exe -ArgumentList "tcp 3389 --log=stdout" -NoNewWindow -RedirectStandardOutput ngrok.log
 
-      - name: Display connection info
+      - name: Get Public URL
+        id: get-url
         run: |
-          $apiUrl = "http://127.0.0.1:4040/api/tunnels"
-          try {
-            $response = Invoke-RestMethod -Uri $apiUrl
-            $tcpAddr = ($response.tunnels | Where-Object { $_.proto -eq "tcp" }).public_url
-            if ($tcpAddr) {
-              Write-Output "✅ Connect using: $tcpAddr"
-            } else {
-              Write-Output "⚠️ Unable to fetch tunnel info yet."
+          $maxAttempts = 10
+          $delay = 5
+          for ($i = 1; $i -le $maxAttempts; $i++) {
+            Write-Host "Attempting to get ngrok URL (Attempt $i)..."
+            $logContent = Get-Content ./ngrok.log -ErrorAction SilentlyContinue
+            $tunnelLine = $logContent | Select-String "url=tcp://(.+)"
+            if ($tunnelLine) {
+              $url = $tunnelLine.Matches.Groups[1].Value
+              Write-Host "✅ Public URL Found: $url"
+              echo "url=$url" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+              exit 0
             }
-          } catch {
-            Write-Output "⚠️ Ngrok API not responding."
+            Start-Sleep -Seconds $delay
           }
+          Write-Error "❌ Failed to get ngrok URL after $maxAttempts attempts."
+          exit 1
+        shell: pwsh
 
-      - name: Keep Alive (6 hours)
-        run: |
-          for ($i = 0; $i -lt 72; $i++) {
-            Write-Host "⏳ Still alive... Hour: $($i * 5) minutes"
-            Start-Sleep -Seconds 300
-          }
-        continue-on-error: true
+      - name: Display Connection Info
+        run: echo "✅ Connect using: ${{ steps.get-url.outputs.url }}"
+
+      - name: Keep Alive
+        run: Start-Sleep -Seconds 21000 # Keep alive for ~6 hours
+        shell: pwsh
